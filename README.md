@@ -1,2 +1,33 @@
-# rental-manager
-Rental Manager is a React + Vite web application for managing rental products, customers, and rental transactions. It provides separate Owner/Admin and Customer dashboards, product inventory management, rental tracking, live rental timers, hourly billing, rental history, and customer account management.
+# Rental Manager
+
+Rental Manager is a web-based rental management system built with React and Vite.
+
+## Features
+
+- Owner/Admin dashboard
+- Customer dashboard
+- Product and inventory management
+- Create and manage rentals
+- Customer registration and login
+- Unique Customer ID and password
+- Live rental duration tracking
+- Hourly rental billing
+- Rental history
+- Customer and rental details
+- Responsive web interface
+
+## Technology
+
+- React
+- Vite
+- JavaScript
+- HTML
+- CSS
+
+## Development
+
+Run the project locally:
+
+```bash
+npm install
+npm run dev
