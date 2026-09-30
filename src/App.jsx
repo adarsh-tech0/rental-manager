@@ -87,10 +87,24 @@ function getTimer(startTime, expectedReturn, currentTime) {
 export default function App() {
   const [userType, setUserType] = useState(null);
 
-  const [products, setProducts] = useState(initialProducts);
+  const [products, setProducts] = useState(() => {
+    try {
+      const saved = localStorage.getItem("rentalManager_products");
+      return saved ? JSON.parse(saved) : initialProducts;
+    } catch {
+      return initialProducts;
+    }
+  });
   const [productSearch, setProductSearch] = useState("");
   const [historySearch, setHistorySearch] = useState("");
-  const [rentals, setRentals] = useState([]);
+  const [rentals, setRentals] = useState(() => {
+    try {
+      const saved = localStorage.getItem("rentalManager_rentals");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
 
   const [currentTime, setCurrentTime] = useState(Date.now());
 
@@ -98,7 +112,17 @@ export default function App() {
   const [customerPassword, setCustomerPassword] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAuthMode, setCustomerAuthMode] = useState("login");
-  const [customerAccounts, setCustomerAccounts] = useState([]);
+  const [customerAccounts, setCustomerAccounts] = useState(() => {
+    try {
+      const saved = localStorage.getItem("rentalManager_customerAccounts");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [forgotCustomerId, setForgotCustomerId] = useState("");
+  const [forgotCustomerPhone, setForgotCustomerPhone] = useState("");
+  const [resetCredentials, setResetCredentials] = useState(null);
   const [newCustomerCredentials, setNewCustomerCredentials] = useState(null);
   const [customerLoggedIn, setCustomerLoggedIn] = useState(false);
 
@@ -125,6 +149,22 @@ export default function App() {
 
     return () => clearInterval(timer);
   }, []);
+
+  // Keep app data after refresh, closing the browser, or reopening the site.
+  useEffect(() => {
+    localStorage.setItem("rentalManager_products", JSON.stringify(products));
+  }, [products]);
+
+  useEffect(() => {
+    localStorage.setItem("rentalManager_rentals", JSON.stringify(rentals));
+  }, [rentals]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "rentalManager_customerAccounts",
+      JSON.stringify(customerAccounts)
+    );
+  }, [customerAccounts]);
 
   const activeRentals = useMemo(
     () => rentals.filter((rental) => rental.status === "active"),
@@ -194,6 +234,46 @@ export default function App() {
     setCustomerAuthMode("login");
   }
 
+  function resetCustomerPassword() {
+    const cleanCustomerId = forgotCustomerId.trim().toUpperCase();
+    const cleanPhone = forgotCustomerPhone.replace(/\D/g, "");
+
+    if (!cleanCustomerId || cleanPhone.length !== 10) {
+      alert("Enter your Customer ID and registered 10-digit mobile number.");
+      return;
+    }
+
+    const customerIndex = customerAccounts.findIndex(
+      (customer) =>
+        customer.customerId.toUpperCase() === cleanCustomerId &&
+        customer.customerPhone === cleanPhone
+    );
+
+    if (customerIndex === -1) {
+      alert("Customer ID and mobile number do not match our records.");
+      return;
+    }
+
+    const newPassword = generateCustomerPassword();
+    const customer = customerAccounts[customerIndex];
+    const updatedCustomer = { ...customer, password: newPassword };
+
+    setCustomerAccounts((previous) =>
+      previous.map((item, index) =>
+        index === customerIndex ? updatedCustomer : item
+      )
+    );
+
+    setResetCredentials({
+      customerId: customer.customerId,
+      password: newPassword,
+    });
+    setCustomerId(customer.customerId);
+    setCustomerPassword(newPassword);
+    setForgotCustomerId("");
+    setForgotCustomerPhone("");
+  }
+
   function loginCustomer() {
     const cleanCustomerId = customerId.trim().toUpperCase();
     const enteredPassword = customerPassword.trim();
@@ -238,6 +318,9 @@ export default function App() {
     setCustomerPhone("");
     setCustomerAuthMode("login");
     setNewCustomerCredentials(null);
+    setForgotCustomerId("");
+    setForgotCustomerPhone("");
+    setResetCredentials(null);
     setOwnerPassword("");
     setAdminPage("home");
   }
@@ -464,7 +547,7 @@ export default function App() {
 
   /* ---------------- CUSTOMER LOGIN ---------------- */
 
-  if (userType === "customer" && !customerLoggedIn) {
+  if (userType === "customer" && !customerLoggedIn && customerAuthMode !== "forgot") {
     return (
       <div className="app">
         <div className="login-page">
@@ -477,6 +560,9 @@ export default function App() {
                 setCustomerPhone("");
                 setCustomerAuthMode("login");
                 setNewCustomerCredentials(null);
+                setForgotCustomerId("");
+                setForgotCustomerPhone("");
+                setResetCredentials(null);
                 setUserType(null);
               }}
             >
@@ -569,11 +655,32 @@ export default function App() {
                   </div>
                 )}
 
+                {resetCredentials && (
+                  <div className="credential-box">
+                    <strong>Password reset successfully</strong>
+                    <p>Save your new password for future login.</p>
+                    <div><span>Customer ID</span><strong>{resetCredentials.customerId}</strong></div>
+                    <div><span>New Password</span><strong>{resetCredentials.password}</strong></div>
+                  </div>
+                )}
+
                 <button
                   className="primary-button full-width"
                   onClick={loginCustomer}
                 >
                   LOGIN
+                </button>
+
+                <button
+                  className="text-button full-width"
+                  onClick={() => {
+                    setCustomerAuthMode("forgot");
+                    setCustomerPassword("");
+                    setNewCustomerCredentials(null);
+                    setResetCredentials(null);
+                  }}
+                >
+                  FORGOT PASSWORD?
                 </button>
 
                 <button
@@ -592,6 +699,89 @@ export default function App() {
                 </p>
               </>
             )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- FORGOT CUSTOMER PASSWORD ---------------- */
+
+  if (userType === "customer" && !customerLoggedIn && customerAuthMode === "forgot") {
+    return (
+      <div className="app">
+        <div className="login-page">
+          <div className="login-card">
+            <button
+              className="back-button"
+              onClick={() => {
+                setCustomerAuthMode("login");
+                setForgotCustomerId("");
+                setForgotCustomerPhone("");
+                setResetCredentials(null);
+              }}
+            >
+              ← Back to Login
+            </button>
+
+            <div className="brand-icon">🔑</div>
+
+            <h1>Forgot Password</h1>
+
+            <p className="login-subtitle">
+              Verify your Customer ID and registered mobile number to create a new password.
+            </p>
+
+            <div className="form-group">
+              <label>Customer ID</label>
+              <input
+                type="text"
+                placeholder="Example: CUST1001"
+                value={forgotCustomerId}
+                onChange={(event) =>
+                  setForgotCustomerId(event.target.value.toUpperCase())
+                }
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Registered Mobile Number</label>
+              <input
+                type="tel"
+                inputMode="numeric"
+                maxLength="10"
+                placeholder="10 digit mobile number"
+                value={forgotCustomerPhone}
+                onChange={(event) =>
+                  setForgotCustomerPhone(event.target.value.replace(/\D/g, ""))
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    resetCustomerPassword();
+                  }
+                }}
+              />
+            </div>
+
+            <button
+              className="primary-button full-width"
+              onClick={resetCustomerPassword}
+            >
+              RESET PASSWORD
+            </button>
+
+            {resetCredentials && (
+              <div className="credential-box">
+                <strong>New password generated</strong>
+                <p>Save these details before leaving this page.</p>
+                <div><span>Customer ID</span><strong>{resetCredentials.customerId}</strong></div>
+                <div><span>New Password</span><strong>{resetCredentials.password}</strong></div>
+              </div>
+            )}
+
+            <p className="demo-note">
+              This recovery method is for the current local prototype. A production version should verify the mobile number with OTP or use a secure backend before allowing a password reset.
+            </p>
           </div>
         </div>
       </div>
