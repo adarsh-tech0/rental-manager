@@ -2,7 +2,7 @@ import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyDZaHlGinQh0X0Osp39DKKTb3lcqvdJhXw",
+  apiKey: "YOUR_API_KEY",
   authDomain: "rental-manager-d47a3.firebaseapp.com",
   projectId: "rental-manager-d47a3",
   storageBucket: "rental-manager-d47a3.firebasestorage.app",
