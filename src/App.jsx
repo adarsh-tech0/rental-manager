@@ -38,7 +38,6 @@ const emptyRentalForm = {
   productId: "",
   customerName: "",
   customerPhone: "",
-  customerId: "",
   expectedReturn: "",
 };
 
@@ -107,6 +106,7 @@ export default function App() {
   const [customerId, setCustomerId] = useState("");
   const [customerPassword, setCustomerPassword] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
+  const [customerRegisterName, setCustomerRegisterName] = useState("");
   const [customerAuthMode, setCustomerAuthMode] = useState("login");
   const [customerAccounts, setCustomerAccounts] = useState([]);
   const [newCustomerCredentials, setNewCustomerCredentials] = useState(null);
@@ -237,6 +237,13 @@ export default function App() {
   async function registerCustomer() {
     const cleanPhone = customerPhone.replace(/\D/g, "");
 
+    const cleanName = customerRegisterName.trim();
+
+    if (!cleanName) {
+      alert("Enter the customer name.");
+      return;
+    }
+
     if (cleanPhone.length !== 10) {
       alert("Enter a valid 10-digit mobile number.");
       return;
@@ -262,6 +269,7 @@ export default function App() {
       const highestNumber = Math.max(1000, ...usedNumbers);
       const newCustomer = {
         customerId: `CUST${highestNumber + 1}`,
+        customerName: cleanName,
         customerPhone: cleanPhone,
         password: generateCustomerPassword(),
         createdAt: new Date().toISOString(),
@@ -321,6 +329,7 @@ export default function App() {
     setCustomerId("");
     setCustomerPassword("");
     setCustomerPhone("");
+    setCustomerRegisterName("");
     setCustomerAuthMode("login");
     setNewCustomerCredentials(null);
     setOwnerPassword("");
@@ -339,20 +348,19 @@ export default function App() {
   async function addRental(event) {
     event.preventDefault();
 
-    if (
-      !rentalForm.productId ||
-      !rentalForm.customerName ||
-      !rentalForm.customerPhone ||
-      !rentalForm.customerId ||
-      !rentalForm.expectedReturn
-    ) {
-      alert("Please fill all rental details.");
+    const cleanPhone = rentalForm.customerPhone.replace(/\D/g, "");
+
+    if (!rentalForm.productId || !cleanPhone || !rentalForm.expectedReturn) {
+      alert("Please select a product, enter the customer's registered mobile number, and choose an expected return time.");
       return;
     }
 
-    const product = products.find(
-      (item) => item.id === Number(rentalForm.productId)
-    );
+    if (cleanPhone.length !== 10) {
+      alert("Enter a valid 10-digit customer mobile number.");
+      return;
+    }
+
+    const product = products.find((item) => item.id === Number(rentalForm.productId));
 
     if (!product) {
       alert("Product not found.");
@@ -364,13 +372,16 @@ export default function App() {
       return;
     }
 
-    const cleanCustomerId = rentalForm.customerId.trim().toUpperCase();
+    // The owner identifies the customer by mobile number. The saved customer
+    // record supplies the name and Customer ID automatically. Customer ID is
+    // kept internally for the customer's own login/history, but is never
+    // entered by the owner.
     const customerAccount = customerAccounts.find(
-      (customer) => customer.customerId === cleanCustomerId
+      (customer) => String(customer.customerPhone || "").replace(/\D/g, "") === cleanPhone
     );
 
     if (!customerAccount) {
-      alert("Customer ID not found. Register the customer first.");
+      alert("Customer not registered. Ask the customer to register first using this mobile number.");
       return;
     }
 
@@ -387,9 +398,9 @@ export default function App() {
       id: rentalId,
       productId: product.id,
       productName: product.name,
-      customerName: rentalForm.customerName,
-      customerPhone: customerAccount.customerPhone,
-      customerId: cleanCustomerId,
+      customerName: customerAccount.customerName || "Customer",
+      customerPhone: cleanPhone,
+      customerId: customerAccount.customerId,
       startTime: startTime.toISOString(),
       expectedReturn: expectedReturn.toISOString(),
       rate: product.rate,
@@ -402,9 +413,7 @@ export default function App() {
 
     try {
       await setDoc(doc(db, "rentals", String(rentalId)), rental);
-      await updateDoc(doc(db, "products", String(product.id)), {
-        available: false,
-      });
+      await updateDoc(doc(db, "products", String(product.id)), { available: false });
 
       setRentalForm(emptyRentalForm);
       setShowRentalForm(false);
@@ -591,6 +600,16 @@ export default function App() {
 
             {customerAuthMode === "register" ? (
               <>
+                <div className="form-group">
+                  <label>Customer Name</label>
+                  <input
+                    type="text"
+                    placeholder="Enter customer name"
+                    value={customerRegisterName}
+                    onChange={(event) => setCustomerRegisterName(event.target.value)}
+                  />
+                </div>
+
                 <div className="form-group">
                   <label>Mobile Number</label>
 
@@ -1686,45 +1705,49 @@ export default function App() {
               </div>
 
               <div className="form-group">
-                <label>Customer Name</label>
-
-                <input
-                  type="text"
-                  name="customerName"
-                  placeholder="Customer name"
-                  value={rentalForm.customerName}
-                  onChange={handleRentalChange}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Customer ID</label>
-
-                <input
-                  type="text"
-                  name="customerId"
-                  placeholder="Example: CUST1001"
-                  value={rentalForm.customerId}
-                  onChange={(event) =>
-                    setRentalForm((previous) => ({
-                      ...previous,
-                      customerId: event.target.value.toUpperCase(),
-                    }))
-                  }
-                />
-              </div>
-
-              <div className="form-group">
                 <label>Customer Mobile</label>
 
                 <input
                   type="tel"
                   name="customerPhone"
-                  placeholder="10 digit mobile number"
+                  inputMode="numeric"
+                  maxLength="10"
+                  placeholder="Registered 10 digit mobile number"
                   value={rentalForm.customerPhone}
-                  onChange={handleRentalChange}
+                  onChange={(event) => {
+                    const phone = event.target.value.replace(/\D/g, "").slice(0, 10);
+                    const customer = customerAccounts.find(
+                      (item) => String(item.customerPhone || "").replace(/\D/g, "") === phone
+                    );
+                    setRentalForm((previous) => ({
+                      ...previous,
+                      customerPhone: phone,
+                      customerName: customer?.customerName || "",
+                    }));
+                  }}
                 />
               </div>
+
+              {rentalForm.customerPhone.length === 10 && (
+                <div className="credential-box">
+                  {(() => {
+                    const customer = customerAccounts.find(
+                      (item) => String(item.customerPhone || "").replace(/\D/g, "") === rentalForm.customerPhone
+                    );
+                    if (!customer) {
+                      return <strong>Customer not registered. Ask the customer to register first.</strong>;
+                    }
+                    return (
+                      <>
+                        <strong>Customer Details</strong>
+                        <div><span>Name</span><strong>{customer.customerName || "-"}</strong></div>
+                        <div><span>Mobile</span><strong>{customer.customerPhone}</strong></div>
+                        <div><span>Customer ID</span><strong>{customer.customerId}</strong></div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
 
               <div className="form-group">
                 <label>Expected Return</label>
