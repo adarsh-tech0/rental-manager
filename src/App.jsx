@@ -1,4 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  setDoc,
+  updateDoc,
+} from "firebase/firestore";
+import { db } from "./firebase";
 import "./App.css";
 
 const initialProducts = [
@@ -87,17 +96,17 @@ function getTimer(startTime, expectedReturn, currentTime) {
 export default function App() {
   const [userType, setUserType] = useState(null);
 
-  const [products, setProducts] = useState(initialProducts);
+  const [products, setProducts] = useState([]);
   const [productSearch, setProductSearch] = useState("");
   const [historySearch, setHistorySearch] = useState("");
   const [rentals, setRentals] = useState([]);
+  const [dataLoading, setDataLoading] = useState(true);
 
   const [currentTime, setCurrentTime] = useState(Date.now());
 
   const [customerId, setCustomerId] = useState("");
   const [customerPassword, setCustomerPassword] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
-  const [customerRegisterName, setCustomerRegisterName] = useState("");
   const [customerAuthMode, setCustomerAuthMode] = useState("login");
   const [customerAccounts, setCustomerAccounts] = useState([]);
   const [newCustomerCredentials, setNewCustomerCredentials] = useState(null);
@@ -125,6 +134,70 @@ export default function App() {
     }, 1000);
 
     return () => clearInterval(timer);
+  }, []);
+
+  // Live Firestore listeners. Every laptop/phone using this app receives
+  // changes from the shared database automatically.
+  useEffect(() => {
+    const unsubscribeProducts = onSnapshot(
+      collection(db, "products"),
+      async (snapshot) => {
+        if (snapshot.empty) {
+          // Seed the default products once. Fixed document IDs prevent duplicates.
+          await Promise.all(
+            initialProducts.map((product) =>
+              setDoc(doc(db, "products", String(product.id)), product, { merge: true })
+            )
+          );
+          return;
+        }
+
+        const nextProducts = snapshot.docs.map((item) => ({
+          id: Number(item.id),
+          ...item.data(),
+        }));
+        setProducts(nextProducts);
+        setDataLoading(false);
+      },
+      (error) => {
+        console.error("Products listener error:", error);
+        alert("Could not read products from Firebase. Check Firestore rules and Firebase configuration.");
+        setDataLoading(false);
+      }
+    );
+
+    const unsubscribeCustomers = onSnapshot(
+      collection(db, "customers"),
+      (snapshot) => {
+        setCustomerAccounts(
+          snapshot.docs.map((item) => ({
+            customerId: item.id,
+            ...item.data(),
+          }))
+        );
+      },
+      (error) => console.error("Customers listener error:", error)
+    );
+
+    const unsubscribeRentals = onSnapshot(
+      collection(db, "rentals"),
+      (snapshot) => {
+        const nextRentals = snapshot.docs
+          .map((item) => ({
+            id: Number(item.id),
+            ...item.data(),
+          }))
+          .sort((a, b) => Number(b.id) - Number(a.id));
+        setRentals(nextRentals);
+      },
+      (error) => console.error("Rentals listener error:", error)
+    );
+
+    return () => {
+      unsubscribeProducts();
+      unsubscribeCustomers();
+      unsubscribeRentals();
+    };
   }, []);
 
   const activeRentals = useMemo(
@@ -161,14 +234,8 @@ export default function App() {
     return password;
   }
 
-  function registerCustomer() {
+  async function registerCustomer() {
     const cleanPhone = customerPhone.replace(/\D/g, "");
-    const cleanName = customerRegisterName.trim();
-
-    if (!cleanName) {
-      alert("Enter the customer name.");
-      return;
-    }
 
     if (cleanPhone.length !== 10) {
       alert("Enter a valid 10-digit mobile number.");
@@ -187,20 +254,29 @@ export default function App() {
       return;
     }
 
-    const newCustomer = {
-      customerId: generateCustomerId(),
-      customerName: cleanName,
-      customerPhone: cleanPhone,
-      password: generateCustomerPassword(),
-      createdAt: new Date().toISOString(),
-    };
+    try {
+      const usedNumbers = customerAccounts
+        .map((customer) => Number(String(customer.customerId).replace("CUST", "")))
+        .filter((number) => Number.isFinite(number));
 
-    setCustomerAccounts((previous) => [...previous, newCustomer]);
-    setNewCustomerCredentials(newCustomer);
-    setCustomerId(newCustomer.customerId);
-    setCustomerPassword(newCustomer.password);
-    setCustomerRegisterName("");
-    setCustomerAuthMode("login");
+      const highestNumber = Math.max(1000, ...usedNumbers);
+      const newCustomer = {
+        customerId: `CUST${highestNumber + 1}`,
+        customerPhone: cleanPhone,
+        password: generateCustomerPassword(),
+        createdAt: new Date().toISOString(),
+      };
+
+      await setDoc(doc(db, "customers", newCustomer.customerId), newCustomer);
+
+      setNewCustomerCredentials(newCustomer);
+      setCustomerId(newCustomer.customerId);
+      setCustomerPassword(newCustomer.password);
+      setCustomerAuthMode("login");
+    } catch (error) {
+      console.error("Customer registration error:", error);
+      alert("Could not create the customer account. Check Firebase configuration and Firestore rules.");
+    }
   }
 
   function loginCustomer() {
@@ -225,7 +301,6 @@ export default function App() {
 
     setCustomerId(customer.customerId);
     setCustomerPhone(customer.customerPhone);
-    setCustomerRegisterName(customer.customerName || "");
     setCustomerLoggedIn(true);
     setNewCustomerCredentials(null);
   }
@@ -246,7 +321,6 @@ export default function App() {
     setCustomerId("");
     setCustomerPassword("");
     setCustomerPhone("");
-    setCustomerRegisterName("");
     setCustomerAuthMode("login");
     setNewCustomerCredentials(null);
     setOwnerPassword("");
@@ -262,47 +336,17 @@ export default function App() {
     }));
   }
 
-  function handleRentalPhoneChange(event) {
-    const cleanPhone = event.target.value.replace(/\D/g, "").slice(0, 10);
-
-    const customer = customerAccounts.find(
-      (item) => item.customerPhone === cleanPhone
-    );
-
-    setRentalForm((previous) => ({
-      ...previous,
-      customerPhone: cleanPhone,
-      customerName: customer?.customerName || "",
-      customerId: customer?.customerId || "",
-    }));
-  }
-
-  function getRentalCustomerByPhone(phone) {
-    const cleanPhone = phone.replace(/\D/g, "");
-
-    return customerAccounts.find(
-      (customer) => customer.customerPhone === cleanPhone
-    );
-  }
-
-  function addRental(event) {
+  async function addRental(event) {
     event.preventDefault();
-
-    const cleanCustomerPhone = rentalForm.customerPhone.replace(/\D/g, "");
-    const customerAccount = getRentalCustomerByPhone(cleanCustomerPhone);
 
     if (
       !rentalForm.productId ||
       !rentalForm.customerName ||
-      cleanCustomerPhone.length !== 10 ||
+      !rentalForm.customerPhone ||
+      !rentalForm.customerId ||
       !rentalForm.expectedReturn
     ) {
-      alert("Please select a product, enter a registered customer phone number, and set the expected return time.");
-      return;
-    }
-
-    if (!customerAccount) {
-      alert("Customer not registered. Ask the customer to register first using their mobile number.");
+      alert("Please fill all rental details.");
       return;
     }
 
@@ -320,8 +364,17 @@ export default function App() {
       return;
     }
 
-    const startTime = new Date();
+    const cleanCustomerId = rentalForm.customerId.trim().toUpperCase();
+    const customerAccount = customerAccounts.find(
+      (customer) => customer.customerId === cleanCustomerId
+    );
 
+    if (!customerAccount) {
+      alert("Customer ID not found. Register the customer first.");
+      return;
+    }
+
+    const startTime = new Date();
     const expectedReturn = new Date(rentalForm.expectedReturn);
 
     if (expectedReturn <= startTime) {
@@ -329,74 +382,65 @@ export default function App() {
       return;
     }
 
+    const rentalId = Date.now();
     const rental = {
-      id: Date.now(),
+      id: rentalId,
       productId: product.id,
       productName: product.name,
       customerName: rentalForm.customerName,
       customerPhone: customerAccount.customerPhone,
-      customerId: rentalForm.customerId.trim().toUpperCase(),
+      customerId: cleanCustomerId,
       startTime: startTime.toISOString(),
       expectedReturn: expectedReturn.toISOString(),
       rate: product.rate,
       estimatedAmount:
-        ((expectedReturn.getTime() - startTime.getTime()) / 3600000) *
-        product.rate,
+        ((expectedReturn.getTime() - startTime.getTime()) / 3600000) * product.rate,
       status: "active",
       returnedAt: null,
       finalAmount: null,
     };
 
-    setRentals((previous) => [rental, ...previous]);
+    try {
+      await setDoc(doc(db, "rentals", String(rentalId)), rental);
+      await updateDoc(doc(db, "products", String(product.id)), {
+        available: false,
+      });
 
-    setProducts((previous) =>
-      previous.map((item) =>
-        item.id === product.id
-          ? { ...item, available: false }
-          : item
-      )
-    );
-
-    setRentalForm(emptyRentalForm);
-    setShowRentalForm(false);
+      setRentalForm(emptyRentalForm);
+      setShowRentalForm(false);
+    } catch (error) {
+      console.error("Start rental error:", error);
+      alert("Could not start the rental. Check your Firebase connection and Firestore rules.");
+    }
   }
 
-  function returnRental(rentalId) {
+  async function returnRental(rentalId) {
     const rental = rentals.find((item) => item.id === rentalId);
 
     if (!rental || rental.status !== "active") return;
 
     const returnedAt = new Date();
-
     const elapsedHours =
-      (returnedAt.getTime() - new Date(rental.startTime).getTime()) /
-      3600000;
-
+      (returnedAt.getTime() - new Date(rental.startTime).getTime()) / 3600000;
     const finalAmount = Math.max(0, elapsedHours) * rental.rate;
 
-    setRentals((previous) =>
-      previous.map((item) =>
-        item.id === rentalId
-          ? {
-              ...item,
-              status: "returned",
-              returnedAt: returnedAt.toISOString(),
-              finalAmount,
-            }
-          : item
-      )
-    );
+    try {
+      await updateDoc(doc(db, "rentals", String(rentalId)), {
+        status: "returned",
+        returnedAt: returnedAt.toISOString(),
+        finalAmount,
+      });
 
-    setProducts((previous) =>
-      previous.map((item) =>
-        item.id === rental.productId
-          ? { ...item, available: true }
-          : item
-      )
-    );
+      await updateDoc(doc(db, "products", String(rental.productId)), {
+        available: true,
+      });
+    } catch (error) {
+      console.error("Return rental error:", error);
+      alert("Could not return the equipment. Check Firebase connection and rules.");
+    }
   }
 
-  function addProduct(event) {
+  async function addProduct(event) {
     event.preventDefault();
 
     if (!productForm.name || !productForm.rate) {
@@ -406,23 +450,27 @@ export default function App() {
 
     const newProduct = {
       id: Date.now(),
-      name: productForm.name,
+      name: productForm.name.trim(),
       rate: Number(productForm.rate),
       unit: "hour",
       available: true,
     };
 
-    setProducts((previous) => [...previous, newProduct]);
+    try {
+      await setDoc(doc(db, "products", String(newProduct.id)), newProduct);
 
-    setProductForm({
-      name: "",
-      rate: "",
-    });
-
-    setShowProductForm(false);
+      setProductForm({
+        name: "",
+        rate: "",
+      });
+      setShowProductForm(false);
+    } catch (error) {
+      console.error("Add product error:", error);
+      alert("Could not add the product. Check Firebase connection and Firestore rules.");
+    }
   }
 
-  function deleteProduct(productId) {
+  async function deleteProduct(productId) {
     const product = products.find((item) => item.id === productId);
 
     if (!product) return;
@@ -432,9 +480,12 @@ export default function App() {
       return;
     }
 
-    setProducts((previous) =>
-      previous.filter((item) => item.id !== productId)
-    );
+    try {
+      await deleteDoc(doc(db, "products", String(productId)));
+    } catch (error) {
+      console.error("Delete product error:", error);
+      alert("Could not delete the product. Check Firebase connection and rules.");
+    }
   }
 
   const customerRentals = rentals.filter(
@@ -446,6 +497,20 @@ export default function App() {
   const loggedInCustomer = customerAccounts.find(
     (customer) => customer.customerId === customerId
   );
+
+  if (dataLoading) {
+    return (
+      <div className="app">
+        <div className="login-page">
+          <div className="login-card">
+            <div className="brand-icon">🏠</div>
+            <h1>Rental Manager</h1>
+            <p className="login-subtitle">Connecting to shared database...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   /* ---------------- LOGIN SELECTION ---------------- */
 
@@ -520,23 +585,12 @@ export default function App() {
 
             <p className="login-subtitle">
               {customerAuthMode === "register"
-                ? "Enter your name and mobile number to create your customer account"
+                ? "Use your mobile number to create your customer account"
                 : "Login using your Customer ID and password"}
             </p>
 
             {customerAuthMode === "register" ? (
               <>
-                <div className="form-group">
-                  <label>Customer Name</label>
-
-                  <input
-                    type="text"
-                    placeholder="Customer name"
-                    value={customerRegisterName}
-                    onChange={(event) => setCustomerRegisterName(event.target.value)}
-                  />
-                </div>
-
                 <div className="form-group">
                   <label>Mobile Number</label>
 
@@ -566,10 +620,7 @@ export default function App() {
 
                 <button
                   className="secondary-button full-width"
-                  onClick={() => {
-                    setCustomerAuthMode("login");
-                    setCustomerRegisterName("");
-                  }}
+                  onClick={() => setCustomerAuthMode("login")}
                 >
                   BACK TO LOGIN
                 </button>
@@ -609,7 +660,6 @@ export default function App() {
                   <div className="credential-box">
                     <strong>Account created successfully</strong>
                     <p>Save these details for future login.</p>
-                    <div><span>Name</span><strong>{newCustomerCredentials.customerName}</strong></div>
                     <div><span>Customer ID</span><strong>{newCustomerCredentials.customerId}</strong></div>
                     <div><span>Password</span><strong>{newCustomerCredentials.password}</strong></div>
                   </div>
@@ -722,7 +772,7 @@ export default function App() {
           <section className="welcome-card">
             <div>
               <span className="section-label">CUSTOMER</span>
-              <h2>Welcome, {loggedInCustomer?.customerName || customerRentals[0]?.customerName || "Customer"}</h2>
+              <h2>Welcome, {customerRentals[0]?.customerName || "Customer"}</h2>
               <p>Customer ID: {customerId}</p>
               <p>Mobile: {loggedInCustomer?.customerPhone || customerRentals[0]?.customerPhone || "-"}</p>
             </div>
@@ -1596,7 +1646,7 @@ export default function App() {
             <div className="modal-header">
               <div>
                 <h2>New Rental</h2>
-                <p>Enter the customer's registered mobile number to load their details</p>
+                <p>Rent equipment to a customer</p>
               </div>
 
               <button
@@ -1636,46 +1686,6 @@ export default function App() {
               </div>
 
               <div className="form-group">
-                <label>Customer Mobile</label>
-
-                <input
-                  type="tel"
-                  name="customerPhone"
-                  inputMode="numeric"
-                  maxLength="10"
-                  placeholder="10 digit mobile number"
-                  value={rentalForm.customerPhone}
-                  onChange={handleRentalPhoneChange}
-                />
-              </div>
-
-              {rentalForm.customerPhone.length === 10 && (
-                rentalForm.customerId ? (
-                  <div className="credential-box rental-customer-found">
-                    <strong>Registered Customer</strong>
-                    <p>Customer details found automatically.</p>
-                    <div>
-                      <span>Name</span>
-                      <strong>{rentalForm.customerName}</strong>
-                    </div>
-                    <div>
-                      <span>Mobile</span>
-                      <strong>{rentalForm.customerPhone}</strong>
-                    </div>
-                    <div>
-                      <span>Customer ID</span>
-                      <strong>{rentalForm.customerId}</strong>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="credential-box rental-customer-not-found">
-                    <strong>Customer not registered</strong>
-                    <p>Ask the customer to register first using this mobile number.</p>
-                  </div>
-                )
-              )}
-
-              <div className="form-group">
                 <label>Customer Name</label>
 
                 <input
@@ -1684,7 +1694,35 @@ export default function App() {
                   placeholder="Customer name"
                   value={rentalForm.customerName}
                   onChange={handleRentalChange}
-                  readOnly={Boolean(rentalForm.customerId)}
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Customer ID</label>
+
+                <input
+                  type="text"
+                  name="customerId"
+                  placeholder="Example: CUST1001"
+                  value={rentalForm.customerId}
+                  onChange={(event) =>
+                    setRentalForm((previous) => ({
+                      ...previous,
+                      customerId: event.target.value.toUpperCase(),
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Customer Mobile</label>
+
+                <input
+                  type="tel"
+                  name="customerPhone"
+                  placeholder="10 digit mobile number"
+                  value={rentalForm.customerPhone}
+                  onChange={handleRentalChange}
                 />
               </div>
 
